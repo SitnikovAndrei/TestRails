@@ -1,5 +1,6 @@
 <?php if (!defined('ROOTPATH')) exit('No direct script access allowed'); ?>
 <?php
+// session_start();
 
 
 class Redmine_custom_defect_plugin extends Defect_plugin
@@ -89,13 +90,6 @@ password=secret'
 					'Using legacy mode but [trackers] is missing'
 				);
 			}
-
-			if (!isset($ini['categories']))
-			{
-				throw new ValidationException(
-					'Using legacy mode but [categories] is missing'
-				);
-			}
 		}
 	}
 	
@@ -110,8 +104,6 @@ password=secret'
 		{
 			$this->_is_legacy = true;
 			$this->_trackers = $ini['trackers'];
-			$this->_categories = $this->_parse_categories(
-				$ini['categories']);
 		}
 	}
 	
@@ -184,16 +176,18 @@ password=secret'
 					'cascading' => true,
 					'size' => 'compact'
 				),
-				'category' => array(
-					'type' => 'dropdown',
-					'label' => 'Category',
-					'remember' => true,
-					'depends_on' => 'project',
-					'size' => 'compact'
-				),
-				'parent_issue' => array(
+                'error_type' => array(
+                    'type' => 'dropdown',
+                    'label' => 'Тип ошибки',
+                    'required' => true,
+                    'remember' => true,
+                    'cascading' => true,
+                    'size' => 'compact'
+                ),
+				'parent_issue_id' => array(
 					'type' => 'string',
 					'label' => 'Родительская задача',
+                    'required' => true,
 					'remember' => true,
 					'size' => 'compact'
 				),
@@ -215,14 +209,15 @@ password=secret'
 		{
 			$subject .= ' (+others)';
 		}
-		
 		return $subject;
 	}
 	
+
 	private function _get_description_default($context)
 	{
 		return $context['test_change']->description;
 	}
+
 	
 	private function _to_id_name_lookup($items)
 	{
@@ -285,6 +280,7 @@ password=secret'
 	public function prepare_field($context, $input, $field)
 	{
 		$data = array();
+        
 		
 		// Process those fields that do not need a connection to the
 		// Redmine installation.		
@@ -301,10 +297,6 @@ password=secret'
 					$data['default'] = $this->_get_description_default(
 						$context);
 					break;
-				case 'parent_issue':
-					$data['default'] = $this->_get_subject_default(
-						$context);
-					break;	
 			}
 		
 			return $data;
@@ -325,6 +317,8 @@ password=secret'
 		// working connection previously in this request) and process
 		// the remaining fields.
 		$api = $this->_get_api();
+
+        // var_dump($data);
 		
 		switch ($field)
 		{
@@ -340,14 +334,26 @@ password=secret'
 				);
 				break;
 
-			case 'category':
-				if (isset($input['project']))
-				{
-					$data['default'] = arr::get($prefs, 'category');
-					$data['options'] = $this->_get_categories($api,
-						$input['project']);
-				}
-				break;
+            case 'parent_issue_id':
+                $data['default'] = arr::get($prefs, 'parent_issue_id');
+                break;
+
+            case 'error_type':
+                $data['default'] = "Внутренняя ошибка";
+                $data['options'] = [
+                                    "Внутренняя ошибка"=>"Внутренняя ошибка",
+                                    "Ошибка от клиента"=>"Ошибка от клиента"
+                                    ];
+                break;
+
+			// case 'category':
+			// 	if (isset($input['project']))
+			// 	{
+			// 		$data['default'] = arr::get($prefs, 'category');
+			// 		$data['options'] = $this->_get_categories($api,
+			// 			$input['project']);
+			// 	}
+			// 	break;
 		}
 		
 		return $data;
@@ -365,9 +371,11 @@ password=secret'
 		$data['subject'] = $input['subject'];
 		$data['tracker'] = $input['tracker'];
 		$data['project'] = $input['project'];
-		$data['parent_issue'] = $input['parent_issue'];
-		$data['category'] = $input['category'];
+		$data['parent_issue_id'] = $input['parent_issue_id'];
+		// $data['category'] = $input['category'];
 		$data['description'] = $input['description'];
+        $data['custom_fields'] = [["id"=>119,"name"=>"Тип ошибки","value"=> $input['error_type']]];
+        // var_dump($data);
 			
 		
 		return $api->add_issue($data);
@@ -651,12 +659,8 @@ class Redmine_api
 		$issue->description = $options['description'];
 		$issue->tracker_id = $options['tracker'];
 		$issue->project_id = $options['project'];
-		
-		if ($options['category'])
-		{
-			$issue->category_id = $options['category'];
-		}
-		
+        $issue->custom_fields = $options['custom_fields'];
+        $issue->parent_issue_id = $options['parent_issue_id'];
 		$data = json::encode(array('issue' => $issue));
 		$response = $this->_send_command('POST', 'issues', $data);
 		return $response->issue->id;
