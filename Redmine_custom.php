@@ -1,7 +1,6 @@
 <?php if (!defined('ROOTPATH')) exit('No direct script access allowed'); ?>
 <?php
 
-
 class Redmine_custom_defect_plugin extends Defect_plugin
 {
 	private $_api;
@@ -32,6 +31,8 @@ address=http://<your-server>/
 user=testrail
 password=secret'
 	);
+
+
 	
 	public function get_meta()
 	{
@@ -190,6 +191,22 @@ password=secret'
 					'remember' => true,
 					'size' => 'compact'
 				),
+                'issue_priorities' => array(
+                    'type' => 'dropdown',
+                    'label' => 'Приоритет',
+                    'required' => true,
+                    'remember' => true,
+                    'cascading' => true,
+                    'size' => 'compact'
+                ),
+                'memberships' => array(
+                    'type' => 'dropdown',
+                    'label' => 'Назначена',
+                    'remember' => true,
+                    'cascading' => true,
+                    'size' => 'compact',
+                    'depends_on' => 'project'
+                ),
 				'description' => array(
 					'type' => 'text',
 					'label' => 'Description',
@@ -202,12 +219,8 @@ password=secret'
 	private function _get_subject_default($context)
 	{		
 		$test = current($context['tests']);
-		$subject = '[TR] Ошибка в кейсе: ' . $test->case->title;
+		$subject = $test->case->title;
 		
-		if ($context['test_count'] > 1)
-		{
-			$subject .= ' (+others)';
-		}
 		return $subject;
 	}
 	
@@ -227,6 +240,72 @@ password=secret'
 		}
 		return $result;
 	}
+
+    private function _to_id_name_lookup_projects($items)
+    {
+        $result = array();
+        foreach ($items as $item)
+        {
+            // if(isset($item->parent) && $item->parent->id == 46)
+            // {
+                $name = "";
+                if(isset($item->parent->name))
+                {
+                    $name .= "[" . $item->parent->name . "] ";
+                }
+                $name .= $item->name;
+
+                // var_dump($name);
+                $result[$item->id] = $name;
+            // }
+        }
+        asort($result);
+        return $result;
+    }
+
+
+    private function _to_id_name_membership_lookup($items)
+    {
+        $result = array();
+        foreach ($items as $item)
+        {
+            if(isset($item->user) && isset($item->roles))
+            {
+                foreach ($item->roles as $value) 
+                {
+                    if ($value->id == 4)
+                    {
+                        $result[$item->user->id] = $item->user->name;
+                        break;
+                    }
+                }
+            }
+        }
+        asort($result);
+        return $result;
+    }
+
+    private function _to_id_name_projects_lookup($items)
+    {
+        $result = array();
+        foreach ($items as $item)
+        {
+            if(isset($item->trackers)){
+                $trackers = $item->trackers;
+
+                foreach ($trackers as $tracker)
+                {
+                    $tracker_id = $tracker->id;
+                    if($tracker_id == 1){
+                        $result[$item->id] = $item->name;
+                    }
+
+                }
+            }
+        }
+        return $result;
+    }
+
 
 	private function _get_trackers($api)
 	{
@@ -317,7 +396,6 @@ password=secret'
 		// the remaining fields.
 		$api = $this->_get_api();
 
-        // var_dump($data);
 		
 		switch ($field)
 		{
@@ -328,7 +406,7 @@ password=secret'
 
 			case 'project':
 				$data['default'] = arr::get($prefs, 'project');
-				$data['options'] = $this->_to_id_name_lookup(
+				$data['options'] = $this->_to_id_name_lookup_projects(
 					$api->get_projects()
 				);
 				break;
@@ -337,6 +415,7 @@ password=secret'
                 $data['default'] = arr::get($prefs, 'parent_issue_id');
                 break;
 
+
             case 'error_type':
                 $data['default'] = "Внутренняя ошибка";
                 $data['options'] = [
@@ -344,6 +423,24 @@ password=secret'
                                     "Ошибка от клиента"=>"Ошибка от клиента"
                                     ];
                 break;
+
+            case 'issue_priorities':
+                $data['default'] = "4";
+                $data['options'] = $this->_to_id_name_lookup(
+                    $api->get_issue_priorities()
+                );
+                break;
+
+            case 'memberships':
+                if (isset($input['project']))
+                {
+                    $data['default'] = arr::get($prefs, 'memberships');
+                    $data['options'] = $this->_to_id_name_membership_lookup(
+                            $api->get_memberships($input['project'])
+                    );
+                }
+                break;
+
 		}
 		
 		return $data;
@@ -351,6 +448,12 @@ password=secret'
 	
 	public function validate_push($context, $input)
 	{
+        // if (empty($input['parent_issue_id']))
+        // {
+        //     throw new ValidationException(
+        //         'Нужно заполнить родительскую заявку');
+
+        // }
 	}
 
 	public function push($context, $input)
@@ -363,6 +466,8 @@ password=secret'
 		$data['project'] = $input['project'];
 		$data['parent_issue_id'] = $input['parent_issue_id'];
 		$data['description'] = $input['description'];
+        $data['priority_id'] = $input['issue_priorities'];
+        $data['assigned_to_id'] = $input['memberships'];
         $data['custom_fields'] = [["id"=>119,"name"=>"Тип ошибки","value"=> $input['error_type']]];
 			
 		
@@ -516,8 +621,15 @@ class Redmine_api
 
 		if ($method == 'GET')
 		{
-			$url .= '?limit=100';
+            // $url .= '?limit=100';
+            if ($command == 'projects')
+            {
+                $url .= '?limit=100&include=trackers';
+            }
+
 		}
+
+
 
 		return $this->_send_request($method, $url, $data);
 	}
@@ -549,6 +661,8 @@ class Redmine_api
 		// we've sent and the entire request/response to the log.
 		if (logger::is_on(GI_LOG_LEVEL_DEBUG))
 		{
+            logger::debugr('redmine_user', $this->_user);
+            logger::debugr('redmine_password', $this->_password);
 			logger::debugr('$data', $data);
 			logger::debugr('$response', $response);
 		}
@@ -599,6 +713,12 @@ class Redmine_api
 		return $response->trackers;
 	}
 
+    public function get_issue_priorities()
+    {
+        $response = $this->_send_command('GET', 'enumerations/issue_priorities');
+        return $response->issue_priorities;
+    }
+
 	/**
 	 * Get Projects
 	 *
@@ -611,6 +731,7 @@ class Redmine_api
 		$response = $this->_send_command('GET', 'projects');
 		return $response->projects;
 	}
+
 	
 	/**
 	 * Get Categories
@@ -625,6 +746,44 @@ class Redmine_api
 			"projects/$project_id/issue_categories");
 		return $response->issue_categories;
 	}
+
+    public function get_memberships($project_id)
+    {
+        $result = [];
+        $count = 0;
+        $offset = 100;
+
+        $url = "projects/" . $project_id . "/memberships";
+
+        $response = $this->_send_command('GET', $url);
+        $total_count = $response->total_count;
+
+        $result = array_merge($result, $response->memberships);
+
+        if ($total_count > 100)
+        {
+            $count = ceil(0 / 100) - 1;
+        }
+
+        if ($count > 1)
+        {
+
+        }
+
+        return $result;
+    }
+
+
+    public function set_relation($parent_issue_id, $response_issue)
+    {
+        $issue = obj::create();
+        $issue->issue_to_id = $parent_issue_id;
+        $issue->relation_type = "relates";
+
+        $data = json::encode(array('relation' => $issue));
+        $url = "issues/" . $response_issue . "/relations";
+        $response = $this->_send_command('POST', $url, $data);
+    }
 	
 	/**
 	 * Add Issue
@@ -648,10 +807,18 @@ class Redmine_api
 		$issue->tracker_id = $options['tracker'];
 		$issue->project_id = $options['project'];
         $issue->custom_fields = $options['custom_fields'];
-        $issue->parent_issue_id = $options['parent_issue_id'];
+        // $issue->parent_issue_id = $options['parent_issue_id'];
+        $issue->assigned_to_id = $options['assigned_to_id'];
+        $issue->priority_id = $options['priority_id'];
 		$data = json::encode(array('issue' => $issue));
+
 		$response = $this->_send_command('POST', 'issues', $data);
-		return $response->issue->id;
+        $response_issue = $response->issue->id;
+        $parent_issue_id = $options['parent_issue_id'];
+
+        $this->set_relation($parent_issue_id, $response_issue);
+
+		return $response_issue;
 	}
 }
 
