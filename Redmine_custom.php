@@ -621,10 +621,10 @@ class Redmine_api
 
 		if ($method == 'GET')
 		{
-            // $url .= '?limit=100';
+            $url .= '?limit=100';
             if ($command == 'projects')
             {
-                $url .= '?limit=100&include=trackers';
+                $url .= '&include=trackers';
             }
 
 		}
@@ -633,6 +633,13 @@ class Redmine_api
 
 		return $this->_send_request($method, $url, $data);
 	}
+
+    private function _my_send_command($method, $command, $data = array())
+    {
+        $url = $this->_address . $command;
+
+        return $this->_send_request($method, $url, $data);
+    }
 	
 	private function _send_request($method, $url, $data)
 	{
@@ -751,24 +758,31 @@ class Redmine_api
     {
         $result = [];
         $count = 0;
-        $offset = 100;
+        $offset = 0;
 
-        $url = "projects/" . $project_id . "/memberships";
+        $url = "projects/" . $project_id . "/memberships.json?limit=100&offset=" . $offset;
 
-        $response = $this->_send_command('GET', $url);
+        $response = $this->_my_send_command('GET', $url);
         $total_count = $response->total_count;
 
         $result = array_merge($result, $response->memberships);
 
         if ($total_count > 100)
         {
-            $count = ceil(0 / 100) - 1;
+            $count = ceil($total_count / 100) - 1;
         }
 
         if ($count > 1)
         {
-
+            for ($x=0; $x<$count; $x++)
+            {
+                $offset += 100;
+                $url = "projects/" . $project_id . "/memberships.json?limit=100&offset=" . $offset;
+                $response = $this->_my_send_command('GET', $url);
+                $result = array_merge($result, $response->memberships);
+            }
         }
+        // var_dump($result);
 
         return $result;
     }
